@@ -4,7 +4,7 @@ LDFLAGS = $(shell pkg-config --libs libsystemd x11 imlib2)
 
 SRC = main.c sni_watcher.c tray_window.c icon_theme.c xembed_tray.c
 OBJ = $(SRC:.c=.o)
-BIN = systray
+BIN = stray
 
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
