@@ -4,12 +4,11 @@
 #include <X11/Xlib.h>
 #include "tray.h"
 
-static void activate_item(TrayState *st, TrayItem *it, int x, int y, int is_context) {
-	const char *method = is_context ? "ContextMenu" : "Activate";
+static void activate(TrayState *st, TrayItem *it, int x, int y, int ctx) {
+	const char *method = ctx ? "ContextMenu" : "Activate";
 	sd_bus_error err = SD_BUS_ERROR_NULL;
 	int ret = sd_bus_call_method(st->bus, it->bus_name, it->object_path,
-	                              "org.kde.StatusNotifierItem", method,
-	                              &err, NULL, "ii", x, y);
+	                              "org.kde.StatusNotifierItem", method, &err, NULL, "ii", x, y);
 	if (ret < 0)
 		fprintf(stderr, "[tray] %s failed for %s: %s\n", method, it->service,
 		        err.message ? err.message : strerror(-ret));
@@ -25,16 +24,13 @@ int main(void) {
 		watcher_shutdown(&st);
 		return 1;
 	}
-	xembed_init(&st); /* best-effort: fine if another tray already owns this */
+	xembed_init(&st); /* fine if another tray already owns the selection */
 
 	int bus_fd = sd_bus_get_fd(st.bus);
 	int x11_fd = ConnectionNumber(st.dpy);
-
 	fprintf(stderr, "[tray] running\n");
 
-	int running = 1;
-	while (running) {
-		/* drain any pending X events first */
+	for (;;) {
 		while (XPending(st.dpy)) {
 			XEvent ev;
 			XNextEvent(st.dpy, &ev);
@@ -52,33 +48,30 @@ int main(void) {
 				break;
 			case ButtonPress: {
 				XButtonEvent *be = &ev.xbutton;
-				TrayItem *it = window_item_at(&st, be->x, be->y);
-				if (it) {
-					int is_context = (be->button == 3);
-					activate_item(&st, it, be->x_root, be->y_root, is_context);
+				if (window_is_toggle(&st, be->x, be->y)) {
+					st.collapsed = !st.collapsed;
+					item_relayout(&st);
+					break;
 				}
+				TrayItem *it = window_item_at(&st, be->x, be->y);
+				if (it)
+					activate(&st, it, be->x_root, be->y_root, be->button == 3);
 				break;
 			}
-			default:
-				break;
 			}
 		}
 
-		/* drain any pending dbus messages */
-		int dispatched;
-		do {
-			dispatched = sd_bus_process(st.bus, NULL);
-		} while (dispatched > 0);
+		while (sd_bus_process(st.bus, NULL) > 0)
+			;
 
 		struct pollfd fds[2] = {
 			{ .fd = bus_fd, .events = POLLIN },
 			{ .fd = x11_fd, .events = POLLIN },
 		};
-		int ret = poll(fds, 2, 1000);
-		if (ret < 0)
+		if (poll(fds, 2, 1000) < 0)
 			break;
-		/* timeout with nothing ready just loops back to check XPending
-		 * again (Xlib can buffer events without more data on the fd) */
+		XRaiseWindow(st.dpy, st.win);
+		XFlush(st.dpy);
 	}
 
 	window_shutdown(&st);

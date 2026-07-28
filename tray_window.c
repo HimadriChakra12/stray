@@ -1,5 +1,7 @@
-/* the strip window: layout, drawing, hit-testing. XEmbed icons are
- * real child windows we just position; SNI items we draw ourselves. */
+/* the tray window: a small corner button when collapsed, a vertical
+ * dropdown of icons when expanded. top corners drop down, bottom
+ * corners pop up - the button always stays put at its corner, the
+ * panel grows toward the center of the screen. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,16 +14,12 @@
 
 #define MAX_LABEL_CHARS 10
 
-/* centers icons/text within the static config.h tray_h */
-static int vpad(void) {
-	int v = (tray_h - icon_size) / 2;
-	return v > 0 ? v : 0;
-}
+static int is_top(void)   { return strstr(tray_gravity, "top") != NULL; }
+static int is_right(void) { return strstr(tray_gravity, "right") != NULL; }
 
 static int item_width(TrayState *st, TrayItem *it) {
 	if (it->argb)
 		return icon_size;
-
 	int len = strlen(it->label);
 	if (len > MAX_LABEL_CHARS) len = MAX_LABEL_CHARS;
 	if (st->font)
@@ -29,39 +27,77 @@ static int item_width(TrayState *st, TrayItem *it) {
 	return len * 7 + 8;
 }
 
-/* lays out embed icons then SNI items left to right, positioned by
- * static config.h gravity/offset */
+/* stacks the toggle button plus every icon vertically. the button
+ * always stays fixed at the actual screen corner: top-corner trays
+ * put it first (icons stack downward below it), bottom-corner trays
+ * put it last (icons stack upward above it) - either way the button
+ * never moves on screen, only the icon list grows away from it. */
 void item_relayout(TrayState *st) {
-	int vp = vpad();
-	int x = pad_x;
-
-	for (EmbedItem *e = st->embed_items; e; e = e->next) {
-		e->x = x;
-		if (st->dpy)
-			XMoveWindow(st->dpy, e->win, x, vp);
-		x += icon_size + icon_gap;
-	}
+	int n = 0;
+	int col_w = icon_size;
+	for (EmbedItem *e = st->embed_items; e; e = e->next) n++;
 	for (TrayItem *it = st->items; it; it = it->next) {
-		it->x = x;
 		it->width = item_width(st, it);
-		x += it->width + icon_gap;
+		if (it->width > col_w) col_w = it->width;
+		n++;
 	}
 
-	int any = st->embed_items || st->items;
-	int w = any ? (x - icon_gap + pad_x) : (pad_x * 2 + icon_size);
+	int w = pad_x * 2 + (st->collapsed ? icon_size : col_w);
+	int h = pad_x * 2 + icon_size;
+
+	if (!st->collapsed && n > 0)
+		h += icon_gap + n * icon_size + (n - 1) * icon_gap;
+
 	st->width = w;
-	st->height = tray_h;
+	st->height = h;
 
 	if (!st->dpy || !st->win)
 		return;
 
+	int top_first = is_top();
+	int y = top_first ? pad_x + icon_size + icon_gap : pad_x;
+
+	if (!st->collapsed && n > 0) {
+		for (EmbedItem *e = st->embed_items; e; e = e->next) {
+			e->y = y;
+			y += icon_size + icon_gap;
+		}
+		for (TrayItem *it = st->items; it; it = it->next) {
+			it->y = y;
+			y += icon_size + icon_gap;
+		}
+	}
+
+	/* XEmbed windows are real children - hide them while collapsed
+	 * instead of leaving them mapped wherever they last sat (which
+	 * is exactly on top of the button) */
+	for (EmbedItem *e = st->embed_items; e; e = e->next) {
+		if (st->collapsed) {
+			XUnmapWindow(st->dpy, e->win);
+		} else {
+			XMoveWindow(st->dpy, e->win, pad_x, e->y);
+			XMapWindow(st->dpy, e->win);
+		}
+	}
+
 	int screen_w = DisplayWidth(st->dpy, st->screen);
 	int screen_h = DisplayHeight(st->dpy, st->screen);
-	int win_x = strstr(tray_gravity, "right") ? screen_w - w - offset_x : offset_x;
-	int win_y = strstr(tray_gravity, "bottom") ? screen_h - tray_h - offset_y : offset_y;
+	int win_x = is_right() ? screen_w - w - offset_x : offset_x;
+	int win_y = top_first ? offset_y : screen_h - h - offset_y;
 
-	XMoveResizeWindow(st->dpy, st->win, win_x, win_y, w, tray_h);
+	XMoveResizeWindow(st->dpy, st->win, win_x, win_y, w, h);
 	window_redraw(st);
+}
+
+/* y-range of the toggle button row, given the current corner */
+static void toggle_row(TrayState *st, int *y0, int *y1) {
+	if (is_top()) {
+		*y0 = pad_x;
+		*y1 = pad_x + icon_size;
+	} else {
+		*y0 = st->height - pad_x - icon_size;
+		*y1 = st->height - pad_x;
+	}
 }
 
 int window_init(TrayState *st) {
@@ -71,6 +107,7 @@ int window_init(TrayState *st) {
 		return -1;
 	}
 	st->screen = DefaultScreen(st->dpy);
+	st->collapsed = start_collapsed;
 
 	XSetWindowAttributes attrs = {
 		.override_redirect = True,
@@ -78,8 +115,7 @@ int window_init(TrayState *st) {
 		.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask | SubstructureNotifyMask,
 	};
 
-	st->width = pad_x * 2 + icon_size;
-	st->height = tray_h;
+	st->width = st->height = pad_x * 2 + icon_size;
 
 	st->win = XCreateWindow(st->dpy, RootWindow(st->dpy, st->screen), 0, 0,
 	                         st->width, st->height, 0, CopyFromParent, InputOutput, CopyFromParent,
@@ -89,7 +125,12 @@ int window_init(TrayState *st) {
 	Atom dock = XInternAtom(st->dpy, "_NET_WM_WINDOW_TYPE_DOCK", False);
 	XChangeProperty(st->dpy, st->win, type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&dock, 1);
 
+	Atom state = XInternAtom(st->dpy, "_NET_WM_STATE", False);
+	Atom above = XInternAtom(st->dpy, "_NET_WM_STATE_ABOVE", False);
+	XChangeProperty(st->dpy, st->win, state, XA_ATOM, 32, PropModeReplace, (unsigned char *)&above, 1);
+
 	XMapWindow(st->dpy, st->win);
+	XRaiseWindow(st->dpy, st->win);
 
 	st->font = XLoadQueryFont(st->dpy, "-*-fixed-medium-r-*--12-*-*-*-*-*-*-*");
 	if (!st->font)
@@ -102,14 +143,11 @@ int window_init(TrayState *st) {
 	return 0;
 }
 
-/* nearest-neighbor scale of an ARGB icon into the icon box, alpha
- * blended against the tray background. bytes are in the network-
- * order layout DBus uses: A,R,G,B. most icon PNGs store RGB=0,0,0
- * for fully-transparent pixels - skipping the alpha blend paints
- * those as solid black instead of the actual background. */
+/* nearest-neighbor scale of an ARGB icon, alpha blended against the
+ * tray background - most icon PNGs store RGB=0,0,0 for transparent
+ * pixels, so skipping the blend paints them solid black */
 static void blit_icon(TrayState *st, TrayItem *it, int x, int y) {
-	unsigned long bg = bg_color;
-	int bg_r = (bg >> 16) & 0xff, bg_g = (bg >> 8) & 0xff, bg_b = bg & 0xff;
+	int bg_r = (bg_color >> 16) & 0xff, bg_g = (bg_color >> 8) & 0xff, bg_b = bg_color & 0xff;
 
 	XImage *img = XCreateImage(st->dpy, DefaultVisual(st->dpy, st->screen), 24, ZPixmap, 0,
 	                            malloc(icon_size * icon_size * 4), icon_size, icon_size, 32, 0);
@@ -131,45 +169,83 @@ static void blit_icon(TrayState *st, TrayItem *it, int x, int y) {
 	XDestroyImage(img);
 }
 
-/* no icon loaded - draw the best label we have instead of a blank box */
-static void draw_label(TrayState *st, TrayItem *it, int x) {
+static void draw_label(TrayState *st, TrayItem *it, int y) {
 	GC gc = XCreateGC(st->dpy, st->win, 0, NULL);
-	XSetForeground(st->dpy, gc, 0x9aa5ce);
+	XSetForeground(st->dpy, gc, toggle_color);
 	if (st->font)
 		XSetFont(st->dpy, gc, st->font->fid);
 
 	int len = strlen(it->label);
 	if (len > MAX_LABEL_CHARS) len = MAX_LABEL_CHARS;
 	int text_h = st->font ? st->font->ascent + st->font->descent : 10;
-	int baseline = vpad() + (icon_size + text_h) / 2 - (st->font ? st->font->descent : 0);
+	int baseline = y + (icon_size + text_h) / 2 - (st->font ? st->font->descent : 0);
 
-	XDrawString(st->dpy, st->win, gc, x + 4, baseline, it->label, len);
+	XDrawString(st->dpy, st->win, gc, pad_x, baseline, it->label, len);
+	XFreeGC(st->dpy, gc);
+}
+
+/* chevron pointing the direction the panel will grow when clicked:
+ * collapsed at a top corner -> down, collapsed at a bottom corner ->
+ * up, and the reverse once expanded (click again to close) */
+static void draw_toggle(TrayState *st) {
+	int y0, y1;
+	toggle_row(st, &y0, &y1);
+	int cx = st->width / 2, cy = (y0 + y1) / 2;
+	int r = icon_size / 4;
+	int down = st->collapsed ? is_top() : !is_top();
+
+	GC gc = XCreateGC(st->dpy, st->win, 0, NULL);
+	XSetForeground(st->dpy, gc, toggle_color);
+	XPoint pts[3];
+	if (down) {
+		pts[0] = (XPoint){cx - r, cy - r / 2};
+		pts[1] = (XPoint){cx + r, cy - r / 2};
+		pts[2] = (XPoint){cx, cy + r / 2};
+	} else {
+		pts[0] = (XPoint){cx - r, cy + r / 2};
+		pts[1] = (XPoint){cx + r, cy + r / 2};
+		pts[2] = (XPoint){cx, cy - r / 2};
+	}
+	XFillPolygon(st->dpy, st->win, gc, pts, 3, Convex, CoordModeOrigin);
 	XFreeGC(st->dpy, gc);
 }
 
 void window_redraw(TrayState *st) {
 	if (!st->dpy) return;
 
+	XRaiseWindow(st->dpy, st->win);
+
 	GC gc = XCreateGC(st->dpy, st->win, 0, NULL);
 	XSetForeground(st->dpy, gc, bg_color);
 	XFillRectangle(st->dpy, st->win, gc, 0, 0, st->width, st->height);
 	XFreeGC(st->dpy, gc);
 
-	for (TrayItem *it = st->items; it; it = it->next) {
-		if (it->argb && it->icon_w > 0 && it->icon_h > 0)
-			blit_icon(st, it, it->x, vpad());
-		else
-			draw_label(st, it, it->x);
-	}
+	draw_toggle(st);
+
+	if (!st->collapsed)
+		for (TrayItem *it = st->items; it; it = it->next) {
+			if (it->argb && it->icon_w > 0 && it->icon_h > 0)
+				blit_icon(st, it, pad_x, it->y);
+			else
+				draw_label(st, it, it->y);
+		}
+
 	XFlush(st->dpy);
 }
 
+int window_is_toggle(TrayState *st, int x, int y) {
+	if (x < 0 || x >= st->width)
+		return 0;
+	int y0, y1;
+	toggle_row(st, &y0, &y1);
+	return y >= y0 && y < y1;
+}
+
 TrayItem *window_item_at(TrayState *st, int x, int y) {
-	int vp = vpad();
-	if (y < vp || y > vp + icon_size)
+	if (st->collapsed || x < pad_x || x >= st->width - pad_x)
 		return NULL;
 	for (TrayItem *it = st->items; it; it = it->next)
-		if (x >= it->x && x < it->x + it->width)
+		if (y >= it->y && y < it->y + icon_size)
 			return it;
 	return NULL;
 }

@@ -15,6 +15,7 @@ $(BIN): $(OBJ)
 
 install: $(BIN)
 	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
+	pkill $(BIN) && $(BIN) &
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/$(BIN)

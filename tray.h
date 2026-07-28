@@ -11,14 +11,14 @@ typedef struct TrayItem {
 	unsigned char *argb;     /* w*h*4 bytes, NULL until fetched */
 	int icon_w, icon_h;
 	int status;              /* 0 passive, 1 active, 2 needs-attention */
-	int x, width;             /* current slot, set by item_relayout */
+	int y, width;             /* current row, set by item_relayout */
 	struct TrayItem *next;
 } TrayItem;
 
 /* a legacy XEmbed icon - a real window reparented into ours */
 typedef struct EmbedItem {
 	Window win;
-	int x;
+	int y;
 	struct EmbedItem *next;
 } EmbedItem;
 
@@ -32,6 +32,7 @@ typedef struct {
 	int screen;
 	int width, height;
 	XFontStruct *font;
+	int collapsed; /* corner button only, click to expand */
 
 	EmbedItem *embed_items;
 	Atom net_system_tray_opcode, xembed_atom;
@@ -61,5 +62,6 @@ int  window_init(TrayState *st);
 void window_redraw(TrayState *st);
 void window_shutdown(TrayState *st);
 TrayItem *window_item_at(TrayState *st, int x, int y);
+int  window_is_toggle(TrayState *st, int x, int y);
 
 #endif
