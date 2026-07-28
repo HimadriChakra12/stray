@@ -4,24 +4,18 @@
 #include <systemd/sd-bus.h>
 #include <X11/Xlib.h>
 
-/* one registered StatusNotifierItem */
+/* a StatusNotifierItem, registered over DBus */
 typedef struct TrayItem {
-	char *bus_name;     /* unique DBus name that owns the item, e.g. ":1.234" */
-	char *service;      /* string passed to RegisterStatusNotifierItem, e.g. "org.discord" or ":1.234/StatusNotifierItem" */
-	char *object_path;  /* object path on that bus name, usually /StatusNotifierItem */
-	char *label;        /* short human-readable name, always set - used when no icon could be loaded */
-
-	unsigned char *argb; /* decoded 32-bit ARGB pixel data, width*height*4 bytes, NULL until fetched */
+	char *bus_name, *service, *object_path;
+	char *label;             /* always set, used when no icon loads */
+	unsigned char *argb;     /* w*h*4 bytes, NULL until fetched */
 	int icon_w, icon_h;
-
-	int status; /* 0=Passive 1=Active 2=NeedsAttention */
-	int x, width; /* current on-screen slot, set by item_relayout - used for hit testing */
-
+	int status;              /* 0 passive, 1 active, 2 needs-attention */
+	int x, width;             /* current slot, set by item_relayout */
 	struct TrayItem *next;
 } TrayItem;
 
-/* a legacy XEmbed-docked tray icon - the app's actual X11 window is
- * reparented into ours, so we don't draw it ourselves, just position it */
+/* a legacy XEmbed icon - a real window reparented into ours */
 typedef struct EmbedItem {
 	Window win;
 	int x;
@@ -31,25 +25,17 @@ typedef struct EmbedItem {
 typedef struct {
 	sd_bus *bus;
 	TrayItem *items;
-	int host_registered; /* did we successfully claim the watcher role */
+	int host_registered;
 
 	Display *dpy;
 	Window win;
 	int screen;
-	int width, height; /* current tray window size */
+	int width, height;
 	XFontStruct *font;
 
 	EmbedItem *embed_items;
-	Atom net_system_tray_opcode;
-	Atom xembed_atom;
-	int xembed_active; /* did we successfully claim the tray selection */
-
-	/* auto-detected host bar (see bar_detect.c) - when found, we
-	 * dock flush against it instead of using the static config.h
-	 * corner/gravity placement */
-	int dock_found;
-	int dock_x, dock_y, dock_w, dock_h;
-	unsigned long dock_bg;
+	Atom net_system_tray_opcode, xembed_atom;
+	int xembed_active;
 } TrayState;
 
 /* sni_watcher.c */
@@ -57,32 +43,23 @@ int  watcher_init(TrayState *st);
 void watcher_shutdown(TrayState *st);
 int  watcher_fetch_item_props(TrayState *st, TrayItem *it);
 int  watcher_fetch_icon_by_name(TrayState *st, TrayItem *it);
+TrayItem *item_find_by_service(TrayState *st, const char *service);
+void item_remove(TrayState *st, TrayItem *it);
+void item_relayout(TrayState *st);
 
 /* icon_theme.c */
 unsigned char *icon_theme_load(const char *icon_name, int pref_size,
                                 const char *extra_theme_path, int *out_w, int *out_h);
 
-/* xembed_tray.c - legacy XEmbed systray protocol, for apps (Java
- * Swing/AWT, older GTK2, etc) that never adopted StatusNotifierItem */
+/* xembed_tray.c */
 int  xembed_init(TrayState *st);
 void xembed_handle_client_message(TrayState *st, XClientMessageEvent *ev);
 void xembed_handle_structure_notify(TrayState *st, XEvent *ev);
-
-/* bar_detect.c - finds a running EWMH dock/panel (_NET_WM_WINDOW_TYPE_DOCK)
- * so the tray can auto-match its height/edge/position/color instead of
- * relying on static config.h placement */
-int  bar_detect(TrayState *st);
 
 /* tray_window.c */
 int  window_init(TrayState *st);
 void window_redraw(TrayState *st);
 void window_shutdown(TrayState *st);
-/* returns the item under (x,y) in the strip, or NULL */
 TrayItem *window_item_at(TrayState *st, int x, int y);
-
-/* item list helpers, in sni_watcher.c */
-TrayItem *item_find_by_service(TrayState *st, const char *service);
-void item_remove(TrayState *st, TrayItem *it);
-void item_relayout(TrayState *st);
 
 #endif

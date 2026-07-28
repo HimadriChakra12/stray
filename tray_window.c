@@ -12,16 +12,10 @@
 
 #define MAX_LABEL_CHARS 10
 
-/* center within whatever height we're using - a detected bar's, or
- * config.h's static tray_h if none was found */
-static int vpad(TrayState *st) {
-	int h = st->dock_found ? st->dock_h : tray_h;
-	int v = (h - icon_size) / 2;
+/* centers icons/text within the static config.h tray_h */
+static int vpad(void) {
+	int v = (tray_h - icon_size) / 2;
 	return v > 0 ? v : 0;
-}
-
-static unsigned long effective_bg(TrayState *st) {
-	return st->dock_found ? st->dock_bg : bg_color;
 }
 
 static int item_width(TrayState *st, TrayItem *it) {
@@ -35,11 +29,10 @@ static int item_width(TrayState *st, TrayItem *it) {
 	return len * 7 + 8;
 }
 
-/* lays out embed icons then SNI items left to right, then docks the
- * whole strip flush against a detected bar (whichever side has
- * room), or falls back to config.h's static gravity/offset */
+/* lays out embed icons then SNI items left to right, positioned by
+ * static config.h gravity/offset */
 void item_relayout(TrayState *st) {
-	int vp = vpad(st);
+	int vp = vpad();
 	int x = pad_x;
 
 	for (EmbedItem *e = st->embed_items; e; e = e->next) {
@@ -56,37 +49,18 @@ void item_relayout(TrayState *st) {
 
 	int any = st->embed_items || st->items;
 	int w = any ? (x - icon_gap + pad_x) : (pad_x * 2 + icon_size);
-	int h = st->dock_found ? st->dock_h : tray_h;
 	st->width = w;
-	st->height = h;
+	st->height = tray_h;
 
 	if (!st->dpy || !st->win)
 		return;
 
 	int screen_w = DisplayWidth(st->dpy, st->screen);
 	int screen_h = DisplayHeight(st->dpy, st->screen);
-	int win_x, win_y;
+	int win_x = strstr(tray_gravity, "right") ? screen_w - w - offset_x : offset_x;
+	int win_y = strstr(tray_gravity, "bottom") ? screen_h - tray_h - offset_y : offset_y;
 
-	if (st->dock_found) {
-		int gap_right = screen_w - (st->dock_x + st->dock_w);
-		int gap_left = st->dock_x;
-
-		if (gap_right >= w)
-			win_x = st->dock_x + st->dock_w;
-		else if (gap_left >= w)
-			win_x = st->dock_x - w;
-		else {
-			win_x = st->dock_x + st->dock_w - w;
-			fprintf(stderr, "[tray] no gap beside the detected bar (leave some "
-			                "padding in its config) - overlapping its edge\n");
-		}
-		win_y = st->dock_y;
-	} else {
-		win_x = strstr(tray_gravity, "right") ? screen_w - w - offset_x : offset_x;
-		win_y = strstr(tray_gravity, "bottom") ? screen_h - h - offset_y : offset_y;
-	}
-
-	XMoveResizeWindow(st->dpy, st->win, win_x, win_y, w, h);
+	XMoveResizeWindow(st->dpy, st->win, win_x, win_y, w, tray_h);
 	window_redraw(st);
 }
 
@@ -97,16 +71,15 @@ int window_init(TrayState *st) {
 		return -1;
 	}
 	st->screen = DefaultScreen(st->dpy);
-	bar_detect(st); /* best-effort, falls back to config.h if nothing found */
 
 	XSetWindowAttributes attrs = {
 		.override_redirect = True,
-		.background_pixel = effective_bg(st),
+		.background_pixel = bg_color,
 		.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask | SubstructureNotifyMask,
 	};
 
 	st->width = pad_x * 2 + icon_size;
-	st->height = st->dock_found ? st->dock_h : tray_h;
+	st->height = tray_h;
 
 	st->win = XCreateWindow(st->dpy, RootWindow(st->dpy, st->screen), 0, 0,
 	                         st->width, st->height, 0, CopyFromParent, InputOutput, CopyFromParent,
@@ -135,7 +108,7 @@ int window_init(TrayState *st) {
  * for fully-transparent pixels - skipping the alpha blend paints
  * those as solid black instead of the actual background. */
 static void blit_icon(TrayState *st, TrayItem *it, int x, int y) {
-	unsigned long bg = effective_bg(st);
+	unsigned long bg = bg_color;
 	int bg_r = (bg >> 16) & 0xff, bg_g = (bg >> 8) & 0xff, bg_b = bg & 0xff;
 
 	XImage *img = XCreateImage(st->dpy, DefaultVisual(st->dpy, st->screen), 24, ZPixmap, 0,
@@ -168,7 +141,7 @@ static void draw_label(TrayState *st, TrayItem *it, int x) {
 	int len = strlen(it->label);
 	if (len > MAX_LABEL_CHARS) len = MAX_LABEL_CHARS;
 	int text_h = st->font ? st->font->ascent + st->font->descent : 10;
-	int baseline = vpad(st) + (icon_size + text_h) / 2 - (st->font ? st->font->descent : 0);
+	int baseline = vpad() + (icon_size + text_h) / 2 - (st->font ? st->font->descent : 0);
 
 	XDrawString(st->dpy, st->win, gc, x + 4, baseline, it->label, len);
 	XFreeGC(st->dpy, gc);
@@ -178,13 +151,13 @@ void window_redraw(TrayState *st) {
 	if (!st->dpy) return;
 
 	GC gc = XCreateGC(st->dpy, st->win, 0, NULL);
-	XSetForeground(st->dpy, gc, effective_bg(st));
+	XSetForeground(st->dpy, gc, bg_color);
 	XFillRectangle(st->dpy, st->win, gc, 0, 0, st->width, st->height);
 	XFreeGC(st->dpy, gc);
 
 	for (TrayItem *it = st->items; it; it = it->next) {
 		if (it->argb && it->icon_w > 0 && it->icon_h > 0)
-			blit_icon(st, it, it->x, vpad(st));
+			blit_icon(st, it, it->x, vpad());
 		else
 			draw_label(st, it, it->x);
 	}
@@ -192,7 +165,7 @@ void window_redraw(TrayState *st) {
 }
 
 TrayItem *window_item_at(TrayState *st, int x, int y) {
-	int vp = vpad(st);
+	int vp = vpad();
 	if (y < vp || y > vp + icon_size)
 		return NULL;
 	for (TrayItem *it = st->items; it; it = it->next)
