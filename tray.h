@@ -43,6 +43,13 @@ typedef struct {
 	Atom net_system_tray_opcode;
 	Atom xembed_atom;
 	int xembed_active; /* did we successfully claim the tray selection */
+
+	/* auto-detected host bar (see bar_detect.c) - when found, we
+	 * dock flush against it instead of using the static config.h
+	 * corner/gravity placement */
+	int dock_found;
+	int dock_x, dock_y, dock_w, dock_h;
+	unsigned long dock_bg;
 } TrayState;
 
 /* sni_watcher.c */
@@ -60,6 +67,11 @@ unsigned char *icon_theme_load(const char *icon_name, int pref_size,
 int  xembed_init(TrayState *st);
 void xembed_handle_client_message(TrayState *st, XClientMessageEvent *ev);
 void xembed_handle_structure_notify(TrayState *st, XEvent *ev);
+
+/* bar_detect.c - finds a running EWMH dock/panel (_NET_WM_WINDOW_TYPE_DOCK)
+ * so the tray can auto-match its height/edge/position/color instead of
+ * relying on static config.h placement */
+int  bar_detect(TrayState *st);
 
 /* tray_window.c */
 int  window_init(TrayState *st);
