@@ -68,16 +68,16 @@ void item_relayout(TrayState *st) {
 		}
 	}
 
-	/* XEmbed windows are real children - hide them while collapsed
-	 * instead of leaving them mapped wherever they last sat (which
-	 * is exactly on top of the button) */
+	/* XEmbed windows stay mapped always - moving them off past the
+	 * collapsed parent's tiny bounds hides them via X clipping.
+	 * unmapping/remapping to hide them instead can leave Swing/AWT
+	 * tray icons (XDM) blank, since some never repaint after that
+	 * cycle. */
 	for (EmbedItem *e = st->embed_items; e; e = e->next) {
-		if (st->collapsed) {
-			XUnmapWindow(st->dpy, e->win);
-		} else {
+		if (st->collapsed)
+			XMoveWindow(st->dpy, e->win, pad_x, st->height + icon_size);
+		else
 			XMoveWindow(st->dpy, e->win, pad_x, e->y);
-			XMapWindow(st->dpy, e->win);
-		}
 	}
 
 	int screen_w = DisplayWidth(st->dpy, st->screen);
@@ -125,12 +125,7 @@ int window_init(TrayState *st) {
 	Atom dock = XInternAtom(st->dpy, "_NET_WM_WINDOW_TYPE_DOCK", False);
 	XChangeProperty(st->dpy, st->win, type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&dock, 1);
 
-	Atom state = XInternAtom(st->dpy, "_NET_WM_STATE", False);
-	Atom above = XInternAtom(st->dpy, "_NET_WM_STATE_ABOVE", False);
-	XChangeProperty(st->dpy, st->win, state, XA_ATOM, 32, PropModeReplace, (unsigned char *)&above, 1);
-
 	XMapWindow(st->dpy, st->win);
-	XRaiseWindow(st->dpy, st->win);
 
 	st->font = XLoadQueryFont(st->dpy, "-*-fixed-medium-r-*--12-*-*-*-*-*-*-*");
 	if (!st->font)
@@ -212,8 +207,6 @@ static void draw_toggle(TrayState *st) {
 
 void window_redraw(TrayState *st) {
 	if (!st->dpy) return;
-
-	XRaiseWindow(st->dpy, st->win);
 
 	GC gc = XCreateGC(st->dpy, st->win, 0, NULL);
 	XSetForeground(st->dpy, gc, bg_color);

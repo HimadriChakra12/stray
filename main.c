@@ -70,8 +70,6 @@ int main(void) {
 		};
 		if (poll(fds, 2, 1000) < 0)
 			break;
-		XRaiseWindow(st.dpy, st.win);
-		XFlush(st.dpy);
 	}
 
 	window_shutdown(&st);
