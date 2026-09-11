@@ -2,3 +2,4 @@ htray
 *.o
 .hedlog
 tags
+/stray

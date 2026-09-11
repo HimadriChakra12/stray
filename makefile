@@ -7,24 +7,24 @@ CC      = cc
 VERSION != git describe --tags --always --dirty 2>/dev/null || echo dev
 
 CFLAGS  = -std=c11 -pedantic -Wall -Wextra -Os -D_POSIX_C_SOURCE=200809L \
-          -DHTRAY_VERSION='"$(VERSION)"' \
+          -DSTRAY_VERSION='"$(VERSION)"' \
           -isystem vendor `pkg-config --cflags xft`
 LDLIBS  = -lX11 -lXrandr `pkg-config --libs xft`
 BINDIR  = $(HOME)/.local/bin
 
-all: htray
+all: stray
 
-htray: htray.c config.h vendor/stb_ds.h
-	$(CC) $(CFLAGS) -o $@ htray.c $(LDLIBS)
+stray: stray.c config.h stb_ds.h
+	$(CC) $(CFLAGS) -o $@ stray.c $(LDLIBS)
 
-install: htray
+install: stray
 	mkdir -p $(BINDIR)
-	ln -sf "$$(pwd)/htray" $(BINDIR)/htray
+	ln -sf "$$(pwd)/stray" $(BINDIR)/stray
 
 uninstall:
-	rm -f $(BINDIR)/htray
+	rm -f $(BINDIR)/stray
 
 clean:
-	rm -f htray
+	rm -f stray
 
 .PHONY: all install uninstall clean
