@@ -23,11 +23,14 @@ static Display      *dpy;
 static int           screen, haverandr;
 static int           mx, my, mw, mh;
 static Window        root, barwin, selwin;
+static Window        watched;
 static GC            gc;
 static unsigned long bgpx, borderpx;
 static Atom          xa_xembed, xa_manager, xa_trayatom, xa_opcode, xa_orient;
+static Atom          xa_active, xa_wmstate, xa_fullscreen;
 static Window       *icons;
 static int           barw;
+static int           is_fullscreen;
 static volatile sig_atomic_t togglereq;
 
 static void die(const char *msg) { fputs(msg, stderr); exit(1); }
@@ -72,15 +75,61 @@ static void loadconfig(void)
     envstr ("STRAY_FG",        &fg_color);
 }
 
-static int overridden(Window w)
-{
-    XWindowAttributes wa;
-    return XGetWindowAttributes(dpy, w, &wa) && wa.override_redirect;
-}
-
 static int xerror(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }
 
 static void sighandler(int sig) { (void)sig; togglereq = 1; }
+
+static int winisfullscreen(Window w)
+{
+    if (w == None) return 0;
+    Atom type; int fmt; unsigned long n, after;
+    unsigned char *data = NULL;
+    int fs = 0;
+    if (XGetWindowProperty(dpy, w, xa_wmstate, 0, 64, False, XA_ATOM,
+                           &type, &fmt, &n, &after, &data) == Success && data) {
+        Atom *atoms = (Atom *)data;
+        for (unsigned long i = 0; i < n; i++)
+            if (atoms[i] == xa_fullscreen) { fs = 1; break; }
+        XFree(data);
+    }
+    return fs;
+}
+
+static Window activewin(void)
+{
+    Atom type; int fmt; unsigned long n, after;
+    unsigned char *data = NULL;
+    Window w = None;
+    if (XGetWindowProperty(dpy, root, xa_active, 0, 1, False, XA_WINDOW,
+                           &type, &fmt, &n, &after, &data) == Success && data) {
+        w = *(Window *)data;
+        XFree(data);
+    }
+    return w;
+}
+
+static void watchwin(Window w)
+{
+    if (w == watched) return;
+    if (watched != None)
+        XSelectInput(dpy, watched, 0);
+    watched = w;
+    if (w != None)
+        XSelectInput(dpy, w, PropertyChangeMask);
+}
+
+static void updatevisibility(void)
+{
+    Window w = activewin();
+    watchwin(w);
+    int fs = winisfullscreen(w);
+    if (fs == is_fullscreen) return;
+    is_fullscreen = fs;
+    if (fs)
+        XUnmapWindow(dpy, barwin);
+    else
+        XMapRaised(dpy, barwin);
+}
 
 static void updatemon(void)
 {
@@ -185,12 +234,23 @@ static void handle(XEvent *ev)
         break;
 
     case DestroyNotify:
+        if (ev->xdestroywindow.window == watched)
+            watched = None;
         undock(ev->xdestroywindow.window);
         break;
 
     case ReparentNotify:
         if (ev->xreparent.parent != barwin)
             undock(ev->xreparent.window);
+        break;
+
+    case PropertyNotify:
+        if (ev->xproperty.window == root &&
+            ev->xproperty.atom == xa_active)
+            updatevisibility();
+        else if (ev->xproperty.window == watched &&
+                 ev->xproperty.atom == xa_wmstate)
+            updatevisibility();
         break;
 
     case ConfigureNotify:
@@ -200,14 +260,19 @@ static void handle(XEvent *ev)
             layout();
         else if (ev->xconfigure.event == root &&
                  ev->xconfigure.window != barwin &&
-                 !overridden(ev->xconfigure.window))
-            XRaiseWindow(dpy, barwin);
+                 !is_fullscreen) {
+            XWindowAttributes wa;
+            if (XGetWindowAttributes(dpy, ev->xconfigure.window, &wa) &&
+                !wa.override_redirect)
+                XRaiseWindow(dpy, barwin);
+        }
         break;
 
     case MapNotify:
         if (ev->xmap.event == root &&
             ev->xmap.window != barwin &&
-            !ev->xmap.override_redirect)
+            !ev->xmap.override_redirect &&
+            !is_fullscreen)
             XRaiseWindow(dpy, barwin);
         break;
 
@@ -240,10 +305,13 @@ static void setup(void)
     bgpx     = alloccolor(bg_color);
     borderpx = alloccolor(fg_color);
 
-    xa_xembed  = XInternAtom(dpy, "_XEMBED",                      False);
-    xa_manager = XInternAtom(dpy, "MANAGER",                      False);
-    xa_opcode  = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE",      False);
-    xa_orient  = XInternAtom(dpy, "_NET_SYSTEM_TRAY_ORIENTATION", False);
+    xa_xembed     = XInternAtom(dpy, "_XEMBED",                      False);
+    xa_manager    = XInternAtom(dpy, "MANAGER",                      False);
+    xa_opcode     = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE",      False);
+    xa_orient     = XInternAtom(dpy, "_NET_SYSTEM_TRAY_ORIENTATION", False);
+    xa_active     = XInternAtom(dpy, "_NET_ACTIVE_WINDOW",           False);
+    xa_wmstate    = XInternAtom(dpy, "_NET_WM_STATE",                False);
+    xa_fullscreen = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN",     False);
 
     char selname[32];
     snprintf(selname, sizeof selname, "_NET_SYSTEM_TRAY_S%d", screen);
@@ -277,6 +345,11 @@ static void setup(void)
     XClassHint ch; ch.res_name = ch.res_class = "stray";
     XSetClassHint(dpy, barwin, &ch);
 
+    XWMHints wmh = {0};
+    wmh.flags = InputHint;
+    wmh.input = False;
+    XSetWMHints(dpy, barwin, &wmh);
+
     gc = XCreateGC(dpy, barwin, 0, NULL);
     XSetForeground(dpy, gc, borderpx);
 
@@ -290,8 +363,9 @@ static void setup(void)
     ev.xclient.data.l[2]    = (long)selwin;
     XSendEvent(dpy, root, False, StructureNotifyMask, &ev);
 
-    XSelectInput(dpy, root, SubstructureNotifyMask);
+    XSelectInput(dpy, root, SubstructureNotifyMask | PropertyChangeMask);
 
+    updatevisibility();
     layout();
     XMapRaised(dpy, barwin);
 
@@ -309,7 +383,8 @@ static void run(void)
     for (;;) {
         if (togglereq) {
             togglereq = 0;
-            XRaiseWindow(dpy, barwin);
+            if (!is_fullscreen)
+                XRaiseWindow(dpy, barwin);
             XSync(dpy, False);
         }
         XNextEvent(dpy, &ev);
