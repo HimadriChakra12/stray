@@ -9,16 +9,18 @@ CFLAGS  = -std=c11 -pedantic -Wall -Wextra -Os -D_POSIX_C_SOURCE=200809L \
           `pkg-config --cflags xrandr`
 LDLIBS  = -lX11 -lXrandr
 
-BINDIR  = $(HOME)/.local/bin
+PREFIX  = /usr/local
+BINDIR  = $(PREFIX)/bin
+BINARY  = stray
 
 all: stray
 
 stray: stray.c config.h vendor/stb_ds.h
 	$(CC) $(CFLAGS) -o $@ stray.c $(LDLIBS)
 
-install: stray
-	mkdir -p $(BINDIR)
-	ln -sf "$$(pwd)/stray" $(BINDIR)/stray
+install: $(BINARY)
+	strip $(BINARY)
+	install -Dm755 $(BINARY) $(BINDIR)/$(BINARY)
 
 uninstall:
 	rm -f $(BINDIR)/stray

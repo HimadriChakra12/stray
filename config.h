@@ -6,7 +6,7 @@ static unsigned int icon_size  = 12;
 static unsigned int padding_h  = 8;
 static unsigned int margin_v   = 10;
 static unsigned int margin_h   = 15;
-static unsigned int icon_pad   = 4;
+static unsigned int icon_pad   = 8;
 
 static int          border     = 0;
 static unsigned int border_w   = 1;
