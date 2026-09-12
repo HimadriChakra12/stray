@@ -12,27 +12,23 @@
 #endif
 
 #define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
+#include "vendor/stb_ds.h"
 
 #define SYSTEM_TRAY_REQUEST_DOCK 0
 #define XEMBED_EMBEDDED_NOTIFY   0
 
 #include "config.h"
 
-/* ── globals ────────────────────────────────────────────────────────────── */
-
 static Display      *dpy;
 static int           screen, haverandr;
-static int           mx, my, mw, mh;   /* monitor geometry                  */
+static int           mx, my, mw, mh;
 static Window        root, barwin, selwin;
 static GC            gc;
 static unsigned long bgpx, borderpx;
 static Atom          xa_xembed, xa_manager, xa_trayatom, xa_opcode, xa_orient;
-static Window       *icons;             /* stb_ds dynamic array              */
+static Window       *icons;
 static int           barw;
 static volatile sig_atomic_t togglereq;
-
-/* ── helpers ────────────────────────────────────────────────────────────── */
 
 static void die(const char *msg) { fputs(msg, stderr); exit(1); }
 
@@ -62,32 +58,29 @@ static void envstr(const char *name, const char **dst)
 
 static void loadconfig(void)
 {
-    envint ("STRAY_BOTTOM",   &bottom);
-    envstr ("STRAY_ALIGN",    &align);
-    envuint("STRAY_HEIGHT",   &height);
-    envuint("STRAY_ICONSIZE", &icon_size);
-    envuint("STRAY_VPAD",     &vert_pad);
-    envuint("STRAY_HPAD",     &hor_pad);
-    envuint("STRAY_ICONPAD",  &icon_pad);
-    envint ("STRAY_BORDER",   &border);
-    envuint("STRAY_BORDERW",  &border_w);
-    envstr ("STRAY_BG",       &bg_color);
-    envstr ("STRAY_FG",       &fg_color);
+    envint ("STRAY_BOTTOM",    &bottom);
+    envstr ("STRAY_ALIGN",     &align);
+    envuint("STRAY_HEIGHT",    &height);
+    envuint("STRAY_ICONSIZE",  &icon_size);
+    envuint("STRAY_PADDINGH",  &padding_h);
+    envuint("STRAY_MARGINV",   &margin_v);
+    envuint("STRAY_MARGINH",   &margin_h);
+    envuint("STRAY_ICONPAD",   &icon_pad);
+    envint ("STRAY_BORDER",    &border);
+    envuint("STRAY_BORDERW",   &border_w);
+    envstr ("STRAY_BG",        &bg_color);
+    envstr ("STRAY_FG",        &fg_color);
 }
 
-/* transient OR windows (menus, notifications) sit above us; don't fight them */
 static int overridden(Window w)
 {
     XWindowAttributes wa;
     return XGetWindowAttributes(dpy, w, &wa) && wa.override_redirect;
 }
 
-/* icons vanish without warning; swallow all X errors silently               */
 static int xerror(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }
 
 static void sighandler(int sig) { (void)sig; togglereq = 1; }
-
-/* ── monitor ────────────────────────────────────────────────────────────── */
 
 static void updatemon(void)
 {
@@ -104,43 +97,38 @@ static void updatemon(void)
     XRRFreeMonitors(info);
 }
 
-/* ── layout ─────────────────────────────────────────────────────────────── */
-
 static void layout(void)
 {
     int n  = (int)arrlen(icons);
     int bw = border ? (int)border_w : 0;
     updatemon();
 
-    barw = (int)(2 * hor_pad)
+    barw = (int)(2 * padding_h)
            + n * (int)icon_size
            + (n > 1 ? (n - 1) * (int)icon_pad : 0);
     if (barw < (int)height) barw = (int)height;
 
     int bx;
     if (strcmp(align, "left") == 0)
-        bx = mx;
+        bx = mx + (int)margin_h;
     else if (strcmp(align, "center") == 0)
         bx = mx + (mw - barw - 2 * bw) / 2;
-    else /* right */
-        bx = mx + mw - barw - 2 * bw;
+    else
+        bx = mx + mw - barw - 2 * bw - (int)margin_h;
 
     int by = bottom
-        ? my + mh - (int)height - 2 * bw
-        : my;
+        ? my + mh - (int)height - 2 * bw - (int)margin_v
+        : my + (int)margin_v;
 
     XMoveResizeWindow(dpy, barwin, bx, by, (unsigned)barw, height);
 
-    /* slot icons: vertically centred, packed left with icon_pad gaps        */
-    int x = (int)hor_pad;
+    int x = (int)padding_h;
     int y = ((int)height - (int)icon_size) / 2;
     for (int i = 0; i < n; i++) {
         XMoveResizeWindow(dpy, icons[i], x, y, icon_size, icon_size);
         x += (int)(icon_size + icon_pad);
     }
 }
-
-/* ── tray protocol ──────────────────────────────────────────────────────── */
 
 static void dock(Window w)
 {
@@ -182,8 +170,6 @@ static void undock(Window w)
     XClearWindow(dpy, barwin);
 }
 
-/* ── event dispatch ─────────────────────────────────────────────────────── */
-
 static void handle(XEvent *ev)
 {
     switch (ev->type) {
@@ -208,12 +194,10 @@ static void handle(XEvent *ev)
         break;
 
     case ConfigureNotify:
-        /* icon resized itself — force it back into its slot                 */
         if (iconindex(ev->xconfigure.window) >= 0 &&
             ((unsigned)ev->xconfigure.width  != icon_size ||
              (unsigned)ev->xconfigure.height != icon_size))
             layout();
-        /* stay on top when non-OR windows restack above us                  */
         else if (ev->xconfigure.event == root &&
                  ev->xconfigure.window != barwin &&
                  !overridden(ev->xconfigure.window))
@@ -234,8 +218,6 @@ static void handle(XEvent *ev)
     }
 }
 
-/* ── setup ──────────────────────────────────────────────────────────────── */
-
 static unsigned long alloccolor(const char *name)
 {
     XColor c, dummy;
@@ -255,10 +237,9 @@ static void setup(void)
     root   = RootWindow(dpy, screen);
     int di; haverandr = XRRQueryExtension(dpy, &di, &di);
 
-    bgpx    = alloccolor(bg_color);
+    bgpx     = alloccolor(bg_color);
     borderpx = alloccolor(fg_color);
 
-    /* --- atoms ----------------------------------------------------------- */
     xa_xembed  = XInternAtom(dpy, "_XEMBED",                      False);
     xa_manager = XInternAtom(dpy, "MANAGER",                      False);
     xa_opcode  = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE",      False);
@@ -271,8 +252,7 @@ static void setup(void)
     if (XGetSelectionOwner(dpy, xa_trayatom) != None)
         die("stray: another system tray is already running\n");
 
-    /* invisible selection-owner window                                       */
-    long orient = 0; /* horizontal                                            */
+    long orient = 0;
     selwin = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
     XChangeProperty(dpy, selwin, xa_orient, XA_CARDINAL, 32,
                     PropModeReplace, (unsigned char *)&orient, 1);
@@ -280,7 +260,6 @@ static void setup(void)
     if (XGetSelectionOwner(dpy, xa_trayatom) != selwin)
         die("stray: unable to acquire tray selection\n");
 
-    /* --- bar window ------------------------------------------------------ */
     XSetWindowAttributes swa = {0};
     swa.override_redirect = True;
     swa.background_pixel  = bgpx;
@@ -301,7 +280,6 @@ static void setup(void)
     gc = XCreateGC(dpy, barwin, 0, NULL);
     XSetForeground(dpy, gc, borderpx);
 
-    /* announce ourselves to waiting applets                                  */
     XEvent ev = {0};
     ev.xclient.type         = ClientMessage;
     ev.xclient.window       = root;
@@ -325,8 +303,6 @@ static void setup(void)
     XSync(dpy, False);
 }
 
-/* ── event loop ─────────────────────────────────────────────────────────── */
-
 static void run(void)
 {
     XEvent ev;
@@ -340,8 +316,6 @@ static void run(void)
         handle(&ev);
     }
 }
-
-/* ── main ───────────────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[])
 {
