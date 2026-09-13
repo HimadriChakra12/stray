@@ -4,7 +4,7 @@ static const char  *align      = "right";
 static unsigned int height     = 25;
 static unsigned int icon_size  = 12;
 static unsigned int padding_h  = 8;
-static unsigned int margin_v   = 10;
+static unsigned int margin_v   = 5;
 static unsigned int margin_h   = 6;
 static unsigned int icon_pad   = 8;
 
